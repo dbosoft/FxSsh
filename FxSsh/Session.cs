@@ -18,6 +18,7 @@ namespace FxSsh
     {
         private const byte CarriageReturn = 0x0d;
         private const byte LineFeed = 0x0a;
+
         internal const int MaximumSshPacketSize = LocalChannelDataPacketSize;
         internal const int InitialLocalWindowSize = LocalChannelDataPacketSize * 32;
         internal const int LocalChannelDataPacketSize = 1024 * 32;
@@ -34,7 +35,7 @@ namespace FxSsh
 #if DEBUG
         private readonly TimeSpan _timeout = TimeSpan.FromDays(1);
 #else
-        private readonly TimeSpan _timeout = TimeSpan.FromSeconds(30);
+        private readonly TimeSpan _timeout = TimeSpan.FromDays(1);
 #endif
         private readonly Dictionary<string, string> _hostKey;
 
@@ -103,7 +104,7 @@ namespace FxSsh
 
         public event EventHandler<KeyExchangeArgs> KeysExchanged;
 
-        internal void EstablishConnection()
+        public void EstablishConnection()
         {
             if (!_socket.Connected)
             {
@@ -166,15 +167,23 @@ namespace FxSsh
         private void SetSocketOptions()
         {
             const int socketBufferSize = 2 * MaximumSshPacketSize;
-            _socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, true);
-            _socket.LingerState = new LingerOption(enable: false, seconds: 0);
+
             _socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.SendBuffer, socketBufferSize);
             _socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReceiveBuffer, socketBufferSize);
+            _socket.LingerState = new LingerOption(enable: false, seconds: 0);
             _socket.ReceiveTimeout = (int)_timeout.TotalMilliseconds;
+
+            if (_socket.AddressFamily is AddressFamily.Packet)
+                return;
+
+            _socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, true);
         }
 
         private string SocketReadProtocolVersion()
         {
+            if (_socket.AddressFamily == AddressFamily.Packet || true)
+                return SocketReadProtocolVersionSafe();
+
             // http://tools.ietf.org/html/rfc4253#section-4.2
             var buffer = new byte[255];
             var dummy = new byte[255];
@@ -207,6 +216,34 @@ namespace FxSsh
                 }
                 _socket.Receive(dummy, 0, len, SocketFlags.None);
             }
+            throw new SshConnectionException("Could't read the protocal version", DisconnectReason.ProtocolError);
+        }
+
+        private string SocketReadProtocolVersionSafe()
+        {
+            var buffer = new byte[255];
+            int pos = 0;
+
+            while (pos < buffer.Length)
+            {
+                var charBuffer = new byte[1];
+                var ar = _socket.BeginReceive(charBuffer, 0, 1, SocketFlags.None, null, null);
+                WaitHandle(ar);
+                var len = _socket.EndReceive(ar);
+                if (len == 0)
+                    throw new SshConnectionException("Could't read the protocal version",
+                        DisconnectReason.ProtocolError);
+
+                buffer[pos] = charBuffer[0];
+
+                if (charBuffer[0] == LineFeed)
+                {
+                    return Encoding.ASCII.GetString(buffer, 0, buffer[pos - 1] == CarriageReturn ? pos - 1 : pos);
+                }
+
+                pos++;
+            }
+
             throw new SshConnectionException("Could't read the protocal version", DisconnectReason.ProtocolError);
         }
 
