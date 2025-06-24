@@ -173,7 +173,8 @@ namespace FxSsh
             _socket.LingerState = new LingerOption(enable: false, seconds: 0);
             _socket.ReceiveTimeout = (int)_timeout.TotalMilliseconds;
 
-            if (_socket.AddressFamily is AddressFamily.Packet)
+            // Linux reports AddressFamily.Unknown here
+            if (_socket.AddressFamily is AddressFamily.Packet || true)
                 return;
 
             _socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, true);
